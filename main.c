@@ -16,10 +16,13 @@
 #define PROC_COUNT (9)
 #define STARTING_PROC_ID (1)
 #define MAX_CHILDS_COUNT (3)
+#define MAX_USR_COUNT (101)
+
+//#define RECV
 
 //#define DEBUG_PIDS
 //#define DEBUG_HANDS
-#define DEBUG_SIGS
+//#define DEBUG_SIGS
 
 const unsigned char CHILDS_COUNT[PROC_COUNT] =
 {
@@ -255,8 +258,13 @@ void kill_wait_for_children() {
         printf("%lld %d was terminated after %d SIGUSR1 and %d SIGUSR2\n",
                current_time(), proc_id, usr_amount[0][1], usr_amount[1][1]);
 #else
-    printf("%d %d was terminated after %d SIGUSR1 and %d SIGUSR2\n",
+    printf("%d %d завершил работу после %d SIGUSR1 и %d SIGUSR2\n",
+#ifndef RECV
            getpid(), getppid(), usr_amount[0][1], usr_amount[1][1]);
+#else
+           getpid(), getppid(), usr_amount[0][0], usr_amount[1][0]);
+#endif
+
 #endif
     exit(0);
 }   /*  kill_wait_for_children  */
@@ -279,7 +287,7 @@ void sig_handler(int signum) {
         printf("%lld %d received %s%d\n", current_time(), proc_id,
                "USR", signum+1 );
 #else
-        printf("%d %d %d received %s%d %lld\n", proc_id, getpid(), getppid(),
+        printf("%d %d %d получил %s%d %lld\n", proc_id, getpid(), getppid(),
                "USR", signum+1, current_time() );
 #endif
 
@@ -289,15 +297,17 @@ void sig_handler(int signum) {
 
     // for 2-10 variant only:
     if (proc_id == 1) {
+        if (usr_amount[0][0] + usr_amount[1][0] == MAX_USR_COUNT) {
+            kill_wait_for_children();
+        }
+
         pids_list[PROC_COUNT + 6] = pids_list[PROC_COUNT + 4] = 0;
     }
 
     if (proc_id == 8) {
         do{
             // wait for 6th and 4th processes to send signal
-        }while ( (pids_list[PROC_COUNT + 6] != 1) &&
-                 (pids_list[PROC_COUNT + 4] != 1) );
-        printf("> 8 ok!\n");
+        }while ( (pids_list[PROC_COUNT + 6] + pids_list[PROC_COUNT + 4]) != 2 );
     }
 
     if (! ( (usr_recv[0] == RECV_SIGNALS_COUNT[0][proc_id]) &&
@@ -307,7 +317,6 @@ void sig_handler(int signum) {
 #endif
             if ( (proc_id == 4) && (signum == 0) ) {
                 pids_list[PROC_COUNT + 4] = 1;
-                printf("> 4 ok!\n");
             }
 
             return;
@@ -320,6 +329,14 @@ void sig_handler(int signum) {
     signum = ( (SEND_SIGNALS[proc_id] == SIGUSR1) ? 1 : 2);
     ++usr_amount[signum-1][1];
 
+#ifdef DEBUG_SIGS
+    printf("%lld %d sent %s%d\n", current_time(), proc_id,
+           "USR", signum);
+#else
+    printf("%d %d %d послал %s%d %lld\n", proc_id, getpid(), getppid(),
+           "USR", signum, current_time() );
+#endif
+
     if (to > 0) {
         kill(pids_list[to], SEND_SIGNALS[proc_id]);
     } else if (to < 0) {
@@ -328,19 +345,11 @@ void sig_handler(int signum) {
         return;
     }
 
-// for 2-10 variant only:
+    // for 2-10 variant only:
     if (proc_id == 6) {
         pids_list[PROC_COUNT + 6] = 1;
-        printf("> 6 ok!\n");
     }
 
-#ifdef DEBUG_SIGS
-    printf("%lld %d sent %s%d\n", current_time(), proc_id,
-           "USR", signum);
-#else
-    printf("%d %d %d sent %s%d %lld\n", proc_id, getpid(), getppid(),
-           "USR", signum, current_time() );
-#endif
 }   /*  handler  */
 
 
