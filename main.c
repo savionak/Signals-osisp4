@@ -223,9 +223,8 @@ void set_sig_handler() {
     for (i = 0; i < PROC_COUNT; ++i) {
         char to = SEND_TO[i];
                                                                          /* someone sends me a signal: */
-        if ( ( (to > 0) && (to == proc_id) ) ){
-            /*||                             /* <- directly */
-            /* ( (to < 0) && (getpgid(pids_list[i]) == getpgid(0)) ) ) {      /* <- or through the group */
+        if ( ( (to > 0) && (to == proc_id) )  ||                             /* <- directly */
+             ( (to < 0) && (getpgid(pids_list[-to]) == getpgid(0)) ) ) {      /* <- or through the group */
 
             if (SEND_SIGNALS[i] != 0) { // signal is really sent
                 if (sigaction(SEND_SIGNALS[i], &sa, &oldsa) == -1) {
