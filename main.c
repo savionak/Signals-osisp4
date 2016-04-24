@@ -74,7 +74,8 @@ const char RECV_SIGNALS_COUNT[] =
     { 0, 0, 1, 1, 3, 0, 1, 1, 1 };
 /*    0, 1, 2, 3, 4, 5, 6, 7, 8  */
 
-void set_sig_handler();
+void sig_handler(int signum);
+void set_sig_handler(void (*handler)(void *), int sig_int);
 
 
 char *exec_name = NULL;
@@ -85,7 +86,9 @@ void forker(int curr_number, int childs_count);
 
 char *pids_list_path = "/tmp/pids.log";
 
+void kill_wait_for_children();
 void wait_for_children();
+
 pid_t *pids_list = NULL;
 
 int main(int argc, char *argv[])
@@ -102,6 +105,8 @@ int main(int argc, char *argv[])
 
     forker(0, CHILDS_COUNT[0]);          // create processes tree [2]
 
+    set_sig_handler(&kill_wait_for_children, 1);
+
     if (proc_id == 0) {                  // main process waits [3]
         wait_for_children();
         munmap(pids_list, (2*PROC_COUNT)*sizeof(pid_t));
@@ -116,7 +121,7 @@ int main(int argc, char *argv[])
     printf("%d\tpid: %d\tppid: %d\tpgid: %d\n", proc_id, getpid(), getppid(), getpgid(0));
 #endif
 
-    if (proc_id == STARTING_PROC_ID) {                  // starter waits for all pids available [3]
+    if (proc_id == STARTING_PROC_ID) {                  // starter waits for all pids to be available [3]
         do{
             for (i = 1; (i <= PROC_COUNT) && (pids_list[i] != 0); ++i) {
 
@@ -138,8 +143,7 @@ int main(int argc, char *argv[])
 
         pids_list[0] = 1;           // all pids are set
 
-        set_sig_handler();
-
+        set_sig_handler(&sig_handler, 0);
         do{
             for (i = 1+PROC_COUNT; (i < 2*PROC_COUNT)  && (pids_list[i] != 0); ++i) {
 
@@ -152,14 +156,15 @@ int main(int argc, char *argv[])
         } while (i < 2*PROC_COUNT);
 
 #ifdef DEBUG
-        printf("All handlers are set!");
+        printf("All handlers are set!\n");
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
         }
 #endif
 
-        // <<=========   start signal ping-pong here [7]
+        // <<=========   start signal-flow here [7]
 
+        kill_wait_for_children();   // remove
         return 0;
     }
 
@@ -169,17 +174,26 @@ int main(int argc, char *argv[])
         // wait for all pids to be written
     } while (pids_list[0] == 0);
 
-    set_sig_handler();
+    set_sig_handler(&sig_handler, 0);
+    pids_list[proc_id + PROC_COUNT] = 1;    // handler is set
 
-    pids_list[proc_id + PROC_COUNT] = 1;
+    sleep(5);
 /*
     while (1) {
         pause();  // start cycle
     }
 */
-
     return 0;
 }   /*  main   */
+
+
+void print_error_exit(const char *s_name, const char *msg, const int proc_num) {
+    fprintf(stderr, "%s: %s %d\n", s_name, msg, proc_num);
+
+    pids_list[proc_num] = -1;
+
+    exit(1);
+}   /*  print_error */
 
 
 void wait_for_children() {
@@ -192,32 +206,36 @@ void wait_for_children() {
 
 
 void kill_wait_for_children() {
-    // add sending SIGINT to all children before waiting for them
+    int i = 0;
+
+    for (i = 0; i < CHILDS_COUNT[proc_id]; ++i) {
+#ifdef DEBUG
+        printf("sigint -> %d\n", CHILDS_IDS[proc_id][i]);
+#endif
+        kill(pids_list[CHILDS_IDS[proc_id][i]], SIGINT);
+    }
 
     wait_for_children();
 }   /*  kill_wait_for_children  */
 
 
-void print_error_exit(const char *s_name, const char *msg, const int proc_num) {
-    fprintf(stderr, "%s: %s %d\n", s_name, msg, proc_num);
-
-    pids_list[proc_num] = -1;
-
-    exit(1);
-}   /*  print_error */
-
-
-void handler(int signum) {
+void sig_handler(int signum) {
 
 }   /*  handler  */
 
-void set_sig_handler() {
+
+void set_sig_handler(void (*handler)(void *), int sig_int) {
     sigset_t block_mask;                 // set sighandler [4]
     sigemptyset(&block_mask);
 
     struct sigaction sa, oldsa;
     sa.sa_mask = block_mask;
-    sa.sa_handler = &handler;
+    sa.sa_handler = handler;
+
+    if (sig_int != 0) {
+        sigaction(SIGINT, &sa, &oldsa);
+        return;
+    }
 
     int i = 0;
     for (i = 0; i < PROC_COUNT; ++i) {
@@ -230,8 +248,9 @@ void set_sig_handler() {
                 if (sigaction(SEND_SIGNALS[i], &sa, &oldsa) == -1) {
                     print_error_exit(exec_name, "Can't set sighandler!", proc_id);
                 }
-
-                printf("%d) receives a signal %d from %d\n", proc_id, SEND_SIGNALS[i], i);
+#ifdef DEBUG
+                printf("%d) will receive a signal %d from %d\n", proc_id, SEND_SIGNALS[i], i);
+#endif
             }
         }
     }   /* for */
@@ -240,8 +259,8 @@ void set_sig_handler() {
 
 }   /*  set_sig_handler  */
 
-void forker(int curr_number, int childs_count) {
 
+void forker(int curr_number, int childs_count) {
     pid_t pid = 0;
     int i = 0;
 
