@@ -41,7 +41,7 @@ const unsigned char CHILDS_IDS[PROC_COUNT][MAX_CHILDS_COUNT] =
  * 1 = parent's pgid
  * 2 = previous child group
  */
-const unsigned char GROUP_TYPE[] =
+const unsigned char GROUP_TYPE[PROC_COUNT] =
     { 0, 1, 0, 2, 0, 0, 0, 1, 1 };
 /*    0  1  2  3  4  5  6  7  8  */
 
@@ -53,11 +53,11 @@ const unsigned char GROUP_TYPE[] =
  *
  * f/ex: "-x" means, that signal is sent to the group, process with pid = x is member of
  */
-const char NEXT_RECEIVER[] =
-    { 0, -6, 1, 2, -3, 0, 4, 4, 4 };
+const char SEND_TO[PROC_COUNT] =
+    { 0, -6, 1, 0, -2, 0, 4, 4, 4 };
 /*    0,  1, 2, 3,  4, 5, 6, 7, 8  */
 
-const int SIGNALS[] =
+const int SEND_SIGNALS[PROC_COUNT] =
 {
     0,          /* 0 */
     SIGUSR1,    /* 1 */
@@ -70,13 +70,15 @@ const int SIGNALS[] =
     SIGUSR1     /* 8 */
 };
 
-const char SIGNALS_COUNT[] =
+const char RECV_SIGNALS_COUNT[] =
     { 0, 0, 1, 1, 3, 0, 1, 1, 1 };
 /*    0, 1, 2, 3, 4, 5, 6, 7, 8  */
 
+void set_sig_handler();
+
 
 char *exec_name = NULL;
-void print_error(const char *s_name, const char *msg, const int proc_num);
+void print_error_exit(const char *s_name, const char *msg, const int proc_num);
 
 int proc_id = 0;
 void forker(int curr_number, int childs_count);
@@ -90,21 +92,19 @@ int main(int argc, char *argv[])
 {
     exec_name = basename(argv[0]);
 
-    pids_list = (pid_t*)mmap(pids_list, (PROC_COUNT+1)*sizeof(pid_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    pids_list = (pid_t*)mmap(pids_list, (2*PROC_COUNT)*sizeof(pid_t), PROT_READ | PROT_WRITE,
+                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
-    int i = 0;
-                                                        // initialize pids list with zeros [1]
-    for (i = 0; i <= PROC_COUNT; ++i) {
+    int i = 0;                           // initialize pids list with zeros [1]
+    for (i = 0; i < 2*PROC_COUNT; ++i) {
         pids_list[i] = 0;
     }
 
+    forker(0, CHILDS_COUNT[0]);          // create processes tree [2]
 
-    forker(0, CHILDS_COUNT[0]);                         // create processes tree [2]
-
-
-    if (proc_id == 0) {                                 // main process waits [0]
+    if (proc_id == 0) {                  // main process waits [3]
         wait_for_children();
-        munmap(pids_list, (PROC_COUNT+1)*sizeof(pid_t));
+        munmap(pids_list, (2*PROC_COUNT)*sizeof(pid_t));
         return 0;
     }
 
@@ -116,14 +116,12 @@ int main(int argc, char *argv[])
     printf("%d\tpid: %d\tppid: %d\tpgid: %d\n", proc_id, getpid(), getppid(), getpgid(0));
 #endif
 
-//  =======================================================================================================
-
     if (proc_id == STARTING_PROC_ID) {                  // starter waits for all pids available [3]
         do{
             for (i = 1; (i <= PROC_COUNT) && (pids_list[i] != 0); ++i) {
 
                 if (pids_list[i] == -1) {
-                    print_error(exec_name, "Error: not all processes forked or initialized.\nHalting.", 0);
+                    print_error_exit(exec_name, "Error: not all processes forked or initialized.\nHalting.", 0);
                     exit(1);
                 }
             }
@@ -133,35 +131,33 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
         printf("All pids are set!\n");
 
-        for (i = 0; (i < PROC_COUNT); ++i) {
+        for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
         }
-
-        int times = 0;
 #endif
 
         pids_list[0] = 1;           // all pids are set
 
-        // <------------------ set starter handler here (may be the same as usual handler)
+        set_sig_handler();
 
-        pids_list[STARTING_PROC_ID] = 0;                // handler is set
+        do{
+            for (i = 1+PROC_COUNT; (i < 2*PROC_COUNT)  && (pids_list[i] != 0); ++i) {
 
-        do{                                             // starter waits for all handlers to be set [6]
-#ifdef DEBUG
-        ++times;
-#endif
-            for (i = 1; (i < PROC_COUNT) && (pids_list[i] == 0); ++i) {
-            }
-//            printf(">%d\n", i);
-        } while (pids_list[i] != 0);
-
-        #ifdef DEBUG
-                printf("Ready to start signals-flow after %d rotations\n", times);
-
-                for (i = 0; (i < PROC_COUNT); ++i) {
-                    printf("%d - %d\n", i, pids_list[i]);
+                if (pids_list[i] == -1) {
+                    print_error_exit(exec_name, "Error: not all processes forked or initialized.\nHalting.", 0);
+                    exit(1);
                 }
-        #endif
+            }
+//            printf("%d\t", i);
+        } while (i < 2*PROC_COUNT);
+
+#ifdef DEBUG
+        printf("All handlers are set!");
+        for (i = 0; (i < 2*PROC_COUNT); ++i) {
+            printf("%d - %d\n", i, pids_list[i]);
+        }
+#endif
+
         // <<=========   start signal ping-pong here [7]
 
         return 0;
@@ -173,10 +169,9 @@ int main(int argc, char *argv[])
         // wait for all pids to be written
     } while (pids_list[0] == 0);
 
-    // <---------------------- set handler here
+    set_sig_handler();
 
-    pids_list[proc_id] = 0;             // notify starting_proc, that handler is set
-
+    pids_list[proc_id + PROC_COUNT] = 1;
 /*
     while (1) {
         pause();  // start cycle
@@ -188,9 +183,6 @@ int main(int argc, char *argv[])
 
 
 void wait_for_children() {
-
-    // add sending SIGINT to all children before waiting for them
-
     int i = CHILDS_COUNT[proc_id];
     while (i > 0) {
         wait(NULL);
@@ -199,7 +191,14 @@ void wait_for_children() {
 }   /*  wait_for_children  */
 
 
-void print_error(const char *s_name, const char *msg, const int proc_num) {
+void kill_wait_for_children() {
+    // add sending SIGINT to all children before waiting for them
+
+    wait_for_children();
+}   /*  kill_wait_for_children  */
+
+
+void print_error_exit(const char *s_name, const char *msg, const int proc_num) {
     fprintf(stderr, "%s: %s %d\n", s_name, msg, proc_num);
 
     pids_list[proc_num] = -1;
@@ -212,6 +211,35 @@ void handler(int signum) {
 
 }   /*  handler  */
 
+void set_sig_handler() {
+    sigset_t block_mask;                 // set sighandler [4]
+    sigemptyset(&block_mask);
+
+    struct sigaction sa, oldsa;
+    sa.sa_mask = block_mask;
+    sa.sa_handler = &handler;
+
+    int i = 0;
+    for (i = 0; i < PROC_COUNT; ++i) {
+        char to = SEND_TO[i];
+                                                                         /* someone sends me a signal: */
+        if ( ( (to > 0) && (to == proc_id) ) ){
+            /*||                             /* <- directly */
+            /* ( (to < 0) && (getpgid(pids_list[i]) == getpgid(0)) ) ) {      /* <- or through the group */
+
+            if (SEND_SIGNALS[i] != 0) { // signal is really sent
+                if (sigaction(SEND_SIGNALS[i], &sa, &oldsa) == -1) {
+                    print_error_exit(exec_name, "Can't set sighandler!", proc_id);
+                }
+
+                printf("%d) receives a signal %d from %d\n", proc_id, SEND_SIGNALS[i], i);
+            }
+        }
+    }   /* for */
+
+    pids_list[proc_id + PROC_COUNT] = 1;
+
+}   /*  set_sig_handler  */
 
 void forker(int curr_number, int childs_count) {
 
@@ -223,7 +251,7 @@ void forker(int curr_number, int childs_count) {
         int chld_id = CHILDS_IDS[curr_number][i];
         if ( (pid = fork() ) == -1) {
 
-            print_error(exec_name, "Can't fork!", chld_id);
+            print_error_exit(exec_name, "Can't fork!", chld_id);
 
         } else if (pid == 0) {  /*  child    */
             proc_id = chld_id;
@@ -241,18 +269,18 @@ void forker(int curr_number, int childs_count) {
 
             if (grp_type == 0) {
                 if (setpgid(pid, pid) == -1) {
-                    print_error(exec_name, "Can't set group", chld_id);
+                    print_error_exit(exec_name, "Can't set group", chld_id);
                 } else {
                     prev_chld_grp = pid;
                 }
 
             } else if (grp_type == 1) {
                 if (setpgid(pid, getpgid(0)) == -1) {
-                    print_error(exec_name, "Can't set group", chld_id);
+                    print_error_exit(exec_name, "Can't set group", chld_id);
                 }
             } else if (grp_type == 2) {
                 if (setpgid(pid, prev_chld_grp) == -1) {
-                    print_error(exec_name, "Can't set group", chld_id);
+                    print_error_exit(exec_name, "Can't set group", chld_id);
                 }
             }
 
