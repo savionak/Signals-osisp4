@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <wait.h>
 #include <unistd.h>
@@ -16,7 +17,9 @@
 #define STARTING_PROC_ID (1)
 #define MAX_CHILDS_COUNT (3)
 
-#define DEBUG
+//#define DEBUG_PIDS
+//#define DEBUG_HANDS
+#define DEBUG_SIGS
 
 const unsigned char CHILDS_COUNT[PROC_COUNT] =
 {
@@ -84,7 +87,7 @@ const char RECV_SIGNALS_COUNT[2][PROC_COUNT] =
 };
 
 void sig_handler(int signum);
-void set_sig_handler(void (*handler)(void *), int sig_no);
+void set_sig_handler(void (*handler)(void *), int sig_no, int flags);
 
 
 char *exec_name = NULL;
@@ -93,12 +96,11 @@ void print_error_exit(const char *s_name, const char *msg, const int proc_num);
 int proc_id = 0;
 void forker(int curr_number, int childs_count);
 
-char *pids_list_path = "/tmp/pids.log";
-
 void kill_wait_for_children();
 void wait_for_children();
 
 pid_t *pids_list = NULL;
+
 
 int main(int argc, char *argv[])
 {
@@ -114,9 +116,9 @@ int main(int argc, char *argv[])
 
     forker(0, CHILDS_COUNT[0]);          // create processes tree [2]
 
-    set_sig_handler(&kill_wait_for_children, SIGINT);   // to kill all by Ctrl+C
+    set_sig_handler(&kill_wait_for_children, SIGINT, 0);   // to kill all by Ctrl+C
 
-    set_sig_handler(&kill_wait_for_children, SIGTERM);
+    set_sig_handler(&kill_wait_for_children, SIGTERM, 0);
 
     if (proc_id == 0) {                  // main process waits [3]
         wait_for_children();
@@ -128,7 +130,7 @@ int main(int argc, char *argv[])
 
     pids_list[proc_id] = getpid();          // save pid to list
 
-#ifdef DEBUG
+#ifdef DEBUG_PIDS
     printf("%d\tpid: %d\tppid: %d\tpgid: %d\n", proc_id, getpid(), getppid(), getpgid(0));
 #endif
 
@@ -144,7 +146,7 @@ int main(int argc, char *argv[])
 //            printf("%d\t", i);
         } while (i < PROC_COUNT);
 
-#ifdef DEBUG
+#ifdef DEBUG_PIDS
         printf("All pids are set!\n");
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
@@ -153,7 +155,7 @@ int main(int argc, char *argv[])
 
         pids_list[0] = 1;           // all pids are set
 
-        set_sig_handler(&sig_handler, 0);
+        set_sig_handler(&sig_handler, 0, 0);
 
         do{
             for (i = 1+PROC_COUNT; (i < 2*PROC_COUNT)  && (pids_list[i] != 0); ++i) {
@@ -166,7 +168,11 @@ int main(int argc, char *argv[])
 //            printf("%d\t", i);
         } while (i < 2*PROC_COUNT);
 
-#ifdef DEBUG
+        for (i = PROC_COUNT+1; i < 2*PROC_COUNT; ++i) {     /*  reset flags  */
+            pids_list[i] = 0;
+        }
+
+#ifdef DEBUG_HANDS
         printf("All handlers are set!\n");
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
@@ -174,8 +180,7 @@ int main(int argc, char *argv[])
         puts("==================================");
 #endif
 
-// <<=========   start signal-flow [7]
-        sig_handler(0);
+        sig_handler(0); // start signal-flow
 
     } else {    // other processes
 
@@ -183,13 +188,14 @@ int main(int argc, char *argv[])
             // wait for all pids to be written
         } while (pids_list[0] == 0);
 
-        set_sig_handler(&sig_handler, 0);
+        set_sig_handler(&sig_handler, 0, 0);
     }
 
     while (1) {
         pause();  // start cycle
     }
 
+    return 0;
 }   /*  main   */
 
 
@@ -211,74 +217,145 @@ void wait_for_children() {
 }   /*  wait_for_children  */
 
 
+/* ====================================================== */
+
+long long current_time() {
+    struct timeval time;
+    gettimeofday(&time, NULL);
+
+    return time.tv_usec;
+}   /*  current_time  */
+
+
+/*                U1, U2  */
+volatile int usr_recv[2] = {0, 0};
+
+volatile int usr_amount[2][2] =
+{
+/*   r, s   */
+    {0, 0}, /* SIGUSR1 */
+    {0, 0}  /* SIGUSR2 */
+};
+
+
 void kill_wait_for_children() {
     int i = 0;
 
     for (i = 0; i < CHILDS_COUNT[proc_id]; ++i) {
-#ifdef DEBUG
+#ifdef DEBUG_PIDS
         printf("sigint -> %d\n", CHILDS_IDS[proc_id][i]);
 #endif
         kill(pids_list[CHILDS_IDS[proc_id][i]], SIGINT);
     }
 
     wait_for_children();
+
+    if (proc_id != 0)
+#ifdef DEBUG_SIGS
+        printf("%lld %d was terminated after %d SIGUSR1 and %d SIGUSR2\n",
+               current_time(), proc_id, usr_amount[0][1], usr_amount[1][1]);
+#else
+    printf("%d %d was terminated after %d SIGUSR1 and %d SIGUSR2\n",
+           getpid(), getppid(), usr_amount[0][1], usr_amount[1][1]);
+#endif
     exit(0);
 }   /*  kill_wait_for_children  */
 
 
-static int usr_count[2] = {0, 0};
-static int usr_amount[2] = {0, 0};
-
 void sig_handler(int signum) {
 
-#ifdef DEBUG
-    printf("%d got %d!\n", proc_id, signum);
-#endif
-
     if (signum == SIGUSR1) {
-        ++usr_count[0];
-        ++usr_amount[0];
+        signum = 0;
     } else if (signum == SIGUSR2) {
-        ++usr_count[1];
-        ++usr_amount[1];
+        signum = 1;
+    } else {
+        signum = -1;
     }
-#ifdef DEBUG
-    printf("%d has %d:%d\n", proc_id, usr_count[0], usr_count[1]);
+
+    if (signum != -1) {
+        ++usr_amount[signum][0];
+        ++usr_recv[signum];
+#ifdef DEBUG_SIGS
+        printf("%lld %d received %s%d\n", current_time(), proc_id,
+               "USR", signum+1 );
+#else
+        printf("%d %d %d received %s%d %lld\n", proc_id, getpid(), getppid(),
+               "USR", signum+1, current_time() );
 #endif
 
-    if (signum != 0) {    // not enough
-        if (! ( (usr_count[0] == RECV_SIGNALS_COUNT[0][proc_id]) &&
-            (usr_count[1] == RECV_SIGNALS_COUNT[1][proc_id]) ) ) {
-#ifdef DEBUG
-            printf("%d not enough!\n", proc_id);
+#ifdef DEBUG_SIGS
+    printf("%lld %d has %d:%d\n", current_time(), proc_id, usr_recv[0], usr_recv[1]);
 #endif
+
+    // for 2-10 variant only:
+    if (proc_id == 1) {
+        pids_list[PROC_COUNT + 6] = pids_list[PROC_COUNT + 4] = 0;
+    }
+
+    if (proc_id == 8) {
+        do{
+            // wait for 6th and 4th processes to send signal
+        }while ( (pids_list[PROC_COUNT + 6] != 1) &&
+                 (pids_list[PROC_COUNT + 4] != 1) );
+        printf("> 8 ok!\n");
+    }
+
+    if (! ( (usr_recv[0] == RECV_SIGNALS_COUNT[0][proc_id]) &&
+        (usr_recv[1] == RECV_SIGNALS_COUNT[1][proc_id]) ) ) {
+#ifdef DEBUG_SIGS
+            printf("%lld %d not enough!\n",current_time(), proc_id);
+#endif
+            if ( (proc_id == 4) && (signum == 0) ) {
+                pids_list[PROC_COUNT + 4] = 1;
+                printf("> 4 ok!\n");
+            }
+
             return;
         }
+        usr_recv[0] = usr_recv[1] = 0;
     }
 
-    usr_count[0] = usr_count[1] = 0;
+    char to = SEND_TO[proc_id];
 
-    pid_t to = SEND_TO[proc_id];
-#ifdef DEBUG
-    printf("%d) %d:%d\n", proc_id, usr_amount[0], usr_amount[1]);
-    printf("%d -> %d (%d)\n", proc_id, to, SEND_SIGNALS[proc_id]);
-#endif
+    signum = ( (SEND_SIGNALS[proc_id] == SIGUSR1) ? 1 : 2);
+    ++usr_amount[signum-1][1];
 
     if (to > 0) {
         kill(pids_list[to], SEND_SIGNALS[proc_id]);
     } else if (to < 0) {
         kill(-getpgid(pids_list[-to]), SEND_SIGNALS[proc_id]);
+    } else {
+        return;
     }
 
+// for 2-10 variant only:
+    if (proc_id == 6) {
+        pids_list[PROC_COUNT + 6] = 1;
+        printf("> 6 ok!\n");
+    }
+
+#ifdef DEBUG_SIGS
+    printf("%lld %d sent %s%d\n", current_time(), proc_id,
+           "USR", signum);
+#else
+    printf("%d %d %d sent %s%d %lld\n", proc_id, getpid(), getppid(),
+           "USR", signum, current_time() );
+#endif
 }   /*  handler  */
 
 
-void set_sig_handler(void (*handler)(void *), int sig_no) {
-    sigset_t block_mask;                 // set sighandler [4]
-    sigemptyset(&block_mask);
+void set_sig_handler(void (*handler)(void *), int sig_no, int flags) {
+    struct sigaction sa, oldsa;             // set sighandler [4]
 
-    struct sigaction sa, oldsa;
+    sigset_t block_mask;
+    sigemptyset(&block_mask);
+//    sigaddset(&block_mask, SIGTERM);
+//    sigaddset(&block_mask, SIGINT);
+    sigaddset(&block_mask, SIGUSR1);
+    sigaddset(&block_mask, SIGUSR2);
+
     sa.sa_mask = block_mask;
+    sa.sa_flags = flags;
     sa.sa_handler = handler;
 
     if (sig_no != 0) {
@@ -297,7 +374,7 @@ void set_sig_handler(void (*handler)(void *), int sig_no) {
                 if (sigaction(SEND_SIGNALS[i], &sa, &oldsa) == -1) {
                     print_error_exit(exec_name, "Can't set sighandler!", proc_id);
                 }
-#ifdef DEBUG
+#ifdef DEBUG_HANDS
                 printf("%d) will receive a signal %d from %d\n", proc_id, SEND_SIGNALS[i], i);
 #endif
             }
