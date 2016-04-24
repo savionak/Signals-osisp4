@@ -19,8 +19,10 @@
 #define DEBUG
 
 const unsigned char CHILDS_COUNT[PROC_COUNT] =
-    { 1, 3, 2, 0, 0, 0, 1, 1, 0 };
-/*    0  1  2  3  4  5  6  7  8  */
+{
+/*  0  1  2  3  4  5  6  7  8  */
+    1, 3, 2, 0, 0, 0, 1, 1, 0
+};
 
 const unsigned char CHILDS_IDS[PROC_COUNT][MAX_CHILDS_COUNT] =
 {
@@ -42,8 +44,10 @@ const unsigned char CHILDS_IDS[PROC_COUNT][MAX_CHILDS_COUNT] =
  * 2 = previous child group
  */
 const unsigned char GROUP_TYPE[PROC_COUNT] =
-    { 0, 1, 0, 2, 0, 0, 0, 1, 1 };
-/*    0  1  2  3  4  5  6  7  8  */
+{
+/*  0  1  2  3  4  5  6  7  8  */
+    0, 1, 0, 2, 0, 0, 0, 1, 1
+};
 
 /* Whome to send signal:
  *
@@ -54,8 +58,10 @@ const unsigned char GROUP_TYPE[PROC_COUNT] =
  * f/ex: "-x" means, that signal is sent to the group, process with pid = x is member of
  */
 const char SEND_TO[PROC_COUNT] =
-    { 0, -6, 1, 0, -2, 0, 4, 4, 4 };
-/*    0,  1, 2, 3,  4, 5, 6, 7, 8  */
+{
+/*  0,  1,  2,  3,  4,  5,  6,  7,  8  */
+    0, -6,  1,  0, -2,  0,  4,  4,  4
+};
 
 const int SEND_SIGNALS[PROC_COUNT] =
 {
@@ -70,12 +76,15 @@ const int SEND_SIGNALS[PROC_COUNT] =
     SIGUSR1     /* 8 */
 };
 
-const char RECV_SIGNALS_COUNT[] =
-    { 0, 0, 1, 1, 3, 0, 1, 1, 1 };
+const char RECV_SIGNALS_COUNT[2][PROC_COUNT] =
+{
 /*    0, 1, 2, 3, 4, 5, 6, 7, 8  */
+    { 0, 0, 1, 1, 2, 0, 1, 1, 1 },  /* SIGUSR1 */
+    { 0, 1, 0, 0, 1, 0, 0, 0, 0 }   /* SIGUSR2 */
+};
 
 void sig_handler(int signum);
-void set_sig_handler(void (*handler)(void *), int sig_int);
+void set_sig_handler(void (*handler)(void *), int sig_no);
 
 
 char *exec_name = NULL;
@@ -105,7 +114,9 @@ int main(int argc, char *argv[])
 
     forker(0, CHILDS_COUNT[0]);          // create processes tree [2]
 
-    set_sig_handler(&kill_wait_for_children, 1);
+    set_sig_handler(&kill_wait_for_children, SIGINT);   // to kill all by Ctrl+C
+
+    set_sig_handler(&kill_wait_for_children, SIGTERM);
 
     if (proc_id == 0) {                  // main process waits [3]
         wait_for_children();
@@ -135,7 +146,6 @@ int main(int argc, char *argv[])
 
 #ifdef DEBUG
         printf("All pids are set!\n");
-
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
         }
@@ -144,6 +154,7 @@ int main(int argc, char *argv[])
         pids_list[0] = 1;           // all pids are set
 
         set_sig_handler(&sig_handler, 0);
+
         do{
             for (i = 1+PROC_COUNT; (i < 2*PROC_COUNT)  && (pids_list[i] != 0); ++i) {
 
@@ -160,30 +171,25 @@ int main(int argc, char *argv[])
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
         }
+        puts("==================================");
 #endif
 
-        // <<=========   start signal-flow here [7]
+// <<=========   start signal-flow [7]
+        sig_handler(0);
 
-        kill_wait_for_children();   // remove
-        return 0;
+    } else {    // other processes
+
+        do {
+            // wait for all pids to be written
+        } while (pids_list[0] == 0);
+
+        set_sig_handler(&sig_handler, 0);
     }
 
-// other processes
-
-    do {
-        // wait for all pids to be written
-    } while (pids_list[0] == 0);
-
-    set_sig_handler(&sig_handler, 0);
-    pids_list[proc_id + PROC_COUNT] = 1;    // handler is set
-
-    sleep(5);
-/*
     while (1) {
         pause();  // start cycle
     }
-*/
-    return 0;
+
 }   /*  main   */
 
 
@@ -216,15 +222,58 @@ void kill_wait_for_children() {
     }
 
     wait_for_children();
+    exit(0);
 }   /*  kill_wait_for_children  */
 
 
+static int usr_count[2] = {0, 0};
+static int usr_amount[2] = {0, 0};
+
 void sig_handler(int signum) {
+
+#ifdef DEBUG
+    printf("%d got %d!\n", proc_id, signum);
+#endif
+
+    if (signum == SIGUSR1) {
+        ++usr_count[0];
+        ++usr_amount[0];
+    } else if (signum == SIGUSR2) {
+        ++usr_count[1];
+        ++usr_amount[1];
+    }
+#ifdef DEBUG
+    printf("%d has %d:%d\n", proc_id, usr_count[0], usr_count[1]);
+#endif
+
+    if (signum != 0) {    // not enough
+        if (! ( (usr_count[0] == RECV_SIGNALS_COUNT[0][proc_id]) &&
+            (usr_count[1] == RECV_SIGNALS_COUNT[1][proc_id]) ) ) {
+#ifdef DEBUG
+            printf("%d not enough!\n", proc_id);
+#endif
+            return;
+        }
+    }
+
+    usr_count[0] = usr_count[1] = 0;
+
+    pid_t to = SEND_TO[proc_id];
+#ifdef DEBUG
+    printf("%d) %d:%d\n", proc_id, usr_amount[0], usr_amount[1]);
+    printf("%d -> %d (%d)\n", proc_id, to, SEND_SIGNALS[proc_id]);
+#endif
+
+    if (to > 0) {
+        kill(pids_list[to], SEND_SIGNALS[proc_id]);
+    } else if (to < 0) {
+        kill(-getpgid(pids_list[-to]), SEND_SIGNALS[proc_id]);
+    }
 
 }   /*  handler  */
 
 
-void set_sig_handler(void (*handler)(void *), int sig_int) {
+void set_sig_handler(void (*handler)(void *), int sig_no) {
     sigset_t block_mask;                 // set sighandler [4]
     sigemptyset(&block_mask);
 
@@ -232,8 +281,8 @@ void set_sig_handler(void (*handler)(void *), int sig_int) {
     sa.sa_mask = block_mask;
     sa.sa_handler = handler;
 
-    if (sig_int != 0) {
-        sigaction(SIGINT, &sa, &oldsa);
+    if (sig_no != 0) {
+        sigaction(sig_no, &sa, &oldsa);
         return;
     }
 
