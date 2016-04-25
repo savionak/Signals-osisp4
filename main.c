@@ -103,6 +103,7 @@ void kill_wait_for_children();
 void wait_for_children();
 
 pid_t *pids_list = NULL;
+char *tmp_file_name = "/tmp/pids.log";
 
 
 int main(int argc, char *argv[])
@@ -119,7 +120,7 @@ int main(int argc, char *argv[])
 
     forker(0, CHILDS_COUNT[0]);          // create processes tree [2]
 
-    set_sig_handler(&kill_wait_for_children, SIGINT, 0);   // to kill all by Ctrl+C
+//    set_sig_handler(&kill_wait_for_children, SIGINT, 0);   // to kill all by Ctrl+C
 
     set_sig_handler(&kill_wait_for_children, SIGTERM, 0);
 
@@ -135,6 +136,7 @@ int main(int argc, char *argv[])
 
 #ifdef DEBUG_PIDS
     printf("%d\tpid: %d\tppid: %d\tpgid: %d\n", proc_id, getpid(), getppid(), getpgid(0));
+    fflush(stdout);
 #endif
 
     if (proc_id == STARTING_PROC_ID) {                  // starter waits for all pids to be available [3]
@@ -153,8 +155,20 @@ int main(int argc, char *argv[])
         printf("All pids are set!\n");
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
+            fflush(stdout);
         }
 #endif
+
+        FILE *tmp = fopen(tmp_file_name, "wt");
+        if (tmp == NULL) {
+            print_error_exit(exec_name, "Can't create temp file", 0);
+        }
+
+        for (i = 1; i < PROC_COUNT; ++i) {
+            fprintf(tmp, "%d\n", pids_list[i]);
+        }
+
+        fclose(tmp);
 
         pids_list[0] = 1;           // all pids are set
 
@@ -179,6 +193,7 @@ int main(int argc, char *argv[])
         printf("All handlers are set!\n");
         for (i = 0; (i < 2*PROC_COUNT); ++i) {
             printf("%d - %d\n", i, pids_list[i]);
+            fflush(stdout);
         }
         puts("==================================");
 #endif
@@ -204,6 +219,7 @@ int main(int argc, char *argv[])
 
 void print_error_exit(const char *s_name, const char *msg, const int proc_num) {
     fprintf(stderr, "%s: %s %d\n", s_name, msg, proc_num);
+    fflush(stderr);
 
     pids_list[proc_num] = -1;
 
@@ -247,8 +263,9 @@ void kill_wait_for_children() {
     for (i = 0; i < CHILDS_COUNT[proc_id]; ++i) {
 #ifdef DEBUG_PIDS
         printf("sigint -> %d\n", CHILDS_IDS[proc_id][i]);
+        fflush(stdout);
 #endif
-        kill(pids_list[CHILDS_IDS[proc_id][i]], SIGINT);
+        kill(pids_list[CHILDS_IDS[proc_id][i]], SIGTERM);
     }
 
     wait_for_children();
@@ -264,6 +281,7 @@ void kill_wait_for_children() {
 #else
            getpid(), getppid(), usr_amount[0][0], usr_amount[1][0]);
 #endif
+    fflush(stdout);
 
 #endif
     exit(0);
@@ -290,9 +308,11 @@ void sig_handler(int signum) {
         printf("%d %d %d получил %s%d %lld\n", proc_id, getpid(), getppid(),
                "USR", signum+1, current_time() );
 #endif
+        fflush(stdout);
 
 #ifdef DEBUG_SIGS
     printf("%lld %d has %d:%d\n", current_time(), proc_id, usr_recv[0], usr_recv[1]);
+    fflush(stdout);
 #endif
 
     // for 2-10 variant only:
@@ -314,6 +334,7 @@ void sig_handler(int signum) {
         (usr_recv[1] == RECV_SIGNALS_COUNT[1][proc_id]) ) ) {
 #ifdef DEBUG_SIGS
             printf("%lld %d not enough!\n",current_time(), proc_id);
+            fflush(stdout);
 #endif
             if ( (proc_id == 4) && (signum == 0) ) {
                 pids_list[PROC_COUNT + 4] = 1;
@@ -326,8 +347,10 @@ void sig_handler(int signum) {
 
     char to = SEND_TO[proc_id];
 
-    signum = ( (SEND_SIGNALS[proc_id] == SIGUSR1) ? 1 : 2);
-    ++usr_amount[signum-1][1];
+    if (to != 0) {
+        signum = ( (SEND_SIGNALS[proc_id] == SIGUSR1) ? 1 : 2);
+        ++usr_amount[signum-1][1];
+    }
 
 #ifdef DEBUG_SIGS
     printf("%lld %d sent %s%d\n", current_time(), proc_id,
@@ -336,6 +359,7 @@ void sig_handler(int signum) {
     printf("%d %d %d послал %s%d %lld\n", proc_id, getpid(), getppid(),
            "USR", signum, current_time() );
 #endif
+    fflush(stdout);
 
     if (to > 0) {
         kill(pids_list[to], SEND_SIGNALS[proc_id]);
@@ -358,8 +382,6 @@ void set_sig_handler(void (*handler)(void *), int sig_no, int flags) {
 
     sigset_t block_mask;
     sigemptyset(&block_mask);
-//    sigaddset(&block_mask, SIGTERM);
-//    sigaddset(&block_mask, SIGINT);
     sigaddset(&block_mask, SIGUSR1);
     sigaddset(&block_mask, SIGUSR2);
 
@@ -385,6 +407,7 @@ void set_sig_handler(void (*handler)(void *), int sig_no, int flags) {
                 }
 #ifdef DEBUG_HANDS
                 printf("%d) will receive a signal %d from %d\n", proc_id, SEND_SIGNALS[i], i);
+                fflush(stdout);
 #endif
             }
         }
